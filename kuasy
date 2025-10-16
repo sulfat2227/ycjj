@@ -1,29 +1,16 @@
+#include <Keypad.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include <Keypad.h>
 
-// ================== PIN KONFIGURASI ==================
-const int LASER_VCC = 7;       // Laser module
-const int LDR_DO = 10;         // LDR output digital
-const int BUZZER_VCC = A3;     // Buzzer VCC
-const int BUZZER_GND = A0;     // Buzzer GND
-const int LED_STATUS = 6;      // LED indikator rumah menyala terus
+#define LED_TRIGGER 7
+#define LDR_PIN 10
+#define BUZZER A3
+#define LED_INDICATOR 6
+#define LED_ALARM 8
 
-// ================== ALARM ==================
-enum SystemState { NORMAL, ALARM_ACTIVE, ALARM_COMPLETED, WAIT_PIN };
-SystemState currentState = NORMAL;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-unsigned long alarmStartTime = 0;
-const unsigned long ALARM_DURATION = 5000; // 5 detik alarm pertama
-unsigned long lastSirenTime = 0;
-bool sirenOn = false;
-const unsigned long SIREN_ON_TIME = 700;
-const unsigned long SIREN_OFF_TIME = 300;
-
-// ================== LCD I2C ==================
-LiquidCrystal_I2C lcd(0x27, 16, 2); // alamat 0x27 biasa dipakai
-
-// ================== KEYPAD ==================
+// --- Keypad config ---
 const byte ROWS = 4;
 const byte COLS = 4;
 char keys[ROWS][COLS] = {
@@ -36,134 +23,62 @@ byte rowPins[ROWS] = {2, 3, 4, 5};
 byte colPins[COLS] = {A1, A2, A4, A5};
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-// ================== PASSWORD ==================
-String inputPassword = "";
-String correctPassword = "1234";
-bool alarmSilenced = false;
+bool alarmActive = true; // alarm aktif dari awal
 
-// ================== FUNGSI SIREN ==================
-void updateSirenPattern() {
-  unsigned long currentTime = millis();
-  unsigned long timeInAlarm = currentTime - alarmStartTime;
-  unsigned long timeLeft = ALARM_DURATION - timeInAlarm;
-
-  if (timeLeft < 100) {
-    digitalWrite(BUZZER_VCC, LOW);
-    return;
-  }
-
-  if (sirenOn) {
-    if (currentTime - lastSirenTime >= SIREN_ON_TIME) {
-      sirenOn = false;
-      lastSirenTime = currentTime;
-      digitalWrite(BUZZER_VCC, LOW);
-    }
-  } else {
-    if (currentTime - lastSirenTime >= SIREN_OFF_TIME) {
-      if (timeLeft > SIREN_ON_TIME + 100) {
-        sirenOn = true;
-        lastSirenTime = currentTime;
-        digitalWrite(BUZZER_VCC, HIGH);
-      }
-    }
-  }
-}
-
-// ================== FUNGSI PASSWORD ==================
-void handleKeypadInput() {
-  char key = keypad.getKey();
-  if (key) {
-    if (key == '#') { // konfirmasi PIN
-      if (inputPassword == correctPassword) {
-        alarmSilenced = true;
-        digitalWrite(BUZZER_VCC, LOW);
-        lcd.clear();
-        lcd.print("PIN BENAR!");
-        delay(1000);
-        currentState = NORMAL;
-        lcd.clear();
-        lcd.print("Sistem Normal");
-      } else {
-        lcd.clear();
-        lcd.print("PIN SALAH!");
-        inputPassword = "";
-        delay(1000);
-        lcd.clear();
-        lcd.print("Masukkan PIN:");
-      }
-    } else if (key == '*') { // hapus PIN
-      inputPassword = "";
-      lcd.clear();
-      lcd.print("Masukkan PIN:");
-    } else {
-      inputPassword += key;
-      lcd.setCursor(0, 1);
-      for (int i = 0; i < inputPassword.length(); i++) {
-        lcd.print('*');
-      }
-    }
-  }
-}
-
-// ================== SETUP ==================
 void setup() {
-  pinMode(LASER_VCC, OUTPUT);
-  pinMode(LDR_DO, INPUT);
-  pinMode(BUZZER_VCC, OUTPUT);
-  pinMode(BUZZER_GND, OUTPUT);
-  pinMode(LED_STATUS, OUTPUT);
+  pinMode(LED_TRIGGER, OUTPUT);
+  pinMode(LDR_PIN, INPUT);
+  pinMode(BUZZER, OUTPUT);
+  pinMode(LED_INDICATOR, OUTPUT);
+  pinMode(LED_ALARM, OUTPUT);
 
-  digitalWrite(LASER_VCC, HIGH); // Laser selalu ON
-  digitalWrite(BUZZER_GND, LOW);
-  digitalWrite(BUZZER_VCC, LOW);
-  digitalWrite(LED_STATUS, HIGH);
+  digitalWrite(LED_TRIGGER, HIGH);     // LED pemicu (laser) nyala
+  digitalWrite(LED_INDICATOR, HIGH);   // LED rumah nyala terus
 
-  Serial.begin(9600);
   lcd.init();
   lcd.backlight();
-  lcd.print("Sistem Normal");
+  lcd.setCursor(0,0);
+  lcd.print("Sistem Aktif");
 }
 
-// ================== LOOP ==================
 void loop() {
-  int ldrValue = digitalRead(LDR_DO);
+  char key = keypad.getKey();
 
-  switch (currentState) {
-    case NORMAL:
-      if (ldrValue == HIGH) { // laser terputus
-        currentState = ALARM_ACTIVE;
-        alarmStartTime = millis();
-        lastSirenTime = millis();
-        sirenOn = true;
-        digitalWrite(BUZZER_VCC, HIGH);
-        lcd.clear();
-        lcd.print("ALARM AKTIF!!");
-        Serial.println("Laser terputus -> Alarm!");
-      }
-      break;
-
-    case ALARM_ACTIVE:
-      updateSirenPattern();
-      if (millis() - alarmStartTime >= ALARM_DURATION) {
-        currentState = WAIT_PIN;
-        lcd.clear();
-        lcd.print("Masukkan PIN:");
-        digitalWrite(BUZZER_VCC, HIGH);
-      }
-      break;
-
-    case WAIT_PIN:
-      handleKeypadInput();
-      if (alarmSilenced) {
-        alarmSilenced = false;
-      } else {
-        digitalWrite(BUZZER_VCC, HIGH);
-      }
-      break;
-
-    default:
-      break;
+  // contoh: tekan '#' untuk ON/OFF alarm
+  if (key == '#') {
+    alarmActive = !alarmActive;
+    digitalWrite(BUZZER, LOW);
   }
 
-  delay(10);
+  int sensorValue = digitalRead(LDR_PIN);
+
+  if (alarmActive) {
+    // Alarm aktif, LED indikator alarm menyala stabil
+    digitalWrite(LED_ALARM, HIGH);
+
+    if (sensorValue == HIGH) {
+      // Alarm terpicu
+      digitalWrite(BUZZER, HIGH);
+      blinkAlarmLED(); // berkedip cepat saat terpicu
+      lcd.setCursor(0,1);
+      lcd.print("!!! INTRUDER !!!");
+    } else {
+      digitalWrite(BUZZER, LOW);
+      lcd.setCursor(0,1);
+      lcd.print("Area Aman       ");
+    }
+  } else {
+    // Alarm tidak aktif
+    digitalWrite(LED_ALARM, LOW);
+    digitalWrite(BUZZER, LOW);
+    lcd.setCursor(0,1);
+    lcd.print("Alarm Nonaktif  ");
+  }
+}
+
+void blinkAlarmLED() {
+  digitalWrite(LED_ALARM, HIGH);
+  delay(100);
+  digitalWrite(LED_ALARM, LOW);
+  delay(100);
 }
